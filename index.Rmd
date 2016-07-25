@@ -1,0 +1,235 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "vtenhunen"
+date: "24. july 2016"
+output: html_document
+---
+
+
+# 1 Summary
+
+The goal of this course project was to predict the manner in which test group did their exercise. For this reason prediction models has built, cross validation has used, out of sample error has analysed, and reasons for choises has explained. The prediction model has also used to predict 20 different test cases. 
+
+# 2 Background
+
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes. This is "classe" variable in the training set. 
+
+# 3 Libraries and reproducibility
+
+In this work we need following R libraries and we assume that these are installed beforehand:
+
+```{r libraries, echo=TRUE, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(cache=TRUE) # Cacheing is important for development speed here
+
+library(ggplot2)
+library(caret)
+library(randomForest)
+library(caretEnsemble)
+library(kernlab)
+```
+
+Set the seed:
+
+```{r setseed, echo=TRUE, warning=FALSE, message=FALSE}
+set.seed(101010)
+
+```
+
+# 4 Data
+
+Source of data and additional information: http://groupware.les.inf.puc-rio.br/har
+
+The training data for this project are available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+```{r getdata, echo=TRUE, warning=FALSE, message=FALSE}
+# We use working directory as a directory for the files
+# Read data from the network
+TrainingDataURL="https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+TrainingDataFile="./pml-training.csv"
+      
+      if(!file.exists(TrainingDataFile)){
+            # Get the data for the assignment
+            download.file(TrainingDataURL, TrainingDataFile)
+      }
+
+
+TestDataURL="https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+TestDataFile="./pml-testing.csv"
+      
+      if(!file.exists(TestDataFile)){
+            # Get the data for the assignment
+            download.file(TestDataURL, TestDataFile)
+      }
+
+
+```
+
+Reading the data to the data frame:
+```{r readdata, echo=TRUE, warning=FALSE, message=FALSE}
+trainingdata <- read.csv("pml-training.csv", na.strings=c("NA","#DIV/0!",""))
+testingdata <- read.csv("pml-testing.csv", na.strings=c("NA","#DIV/0!",""))
+```
+
+Dimensions of the data sets are:
+```{r dimensions, echo=TRUE, warning=FALSE, message=FALSE}
+dim(trainingdata)
+dim(testingdata)
+```
+
+Exploratory look to the training data before cleaning the data and analysis:
+
+```{r exploratory, echo=TRUE, warning=FALSE, message=FALSE}
+qplot(classe, colour=user_name, fill=user_name, data=trainingdata)
+```
+
+# 5 Cleaning the data
+
+## 5.1 Names of the columns
+
+First we check names of the columns in the training and testing data sets. Following shows the differences:
+
+```{r colnames, echo=TRUE, warning=FALSE, message=FALSE}
+SameColnames <- colnames(testingdata) == colnames(trainingdata)
+```
+
+Unmatched column names are as follows:
+
+```{r unmatched, echo=TRUE, warning=FALSE, message=FALSE}
+colnames(trainingdata)[SameColnames == FALSE]
+colnames(testingdata)[SameColnames==FALSE]
+```
+
+The training data set has not *problem_id* and the testing data set has not *classe* column which is quite obvious and therefore we can use training data set.
+
+## 5.2 Removing useless columns
+
+We can see that at least first five columns of the data set are unnecessary to be predictors and therefore we remove them from the data sets.
+
+```{r uselesscols, echo=TRUE, warning=FALSE, message=FALSE}
+head(colnames(trainingdata))
+``` 
+
+```{r removeuselesscols, echo=TRUE, warning=FALSE, message=FALSE}
+trainingdata <- trainingdata[,-c(1:5)]
+testingdata <- testingdata[,-c(1:5)]
+```
+
+
+## 5.3 Removing columns where the most values are NAs
+
+Then we need to remove columns where the the data is NAs.
+
+```{r missingvals, echo=TRUE, warning=FALSE, message=FALSE}
+trainingdata <- trainingdata[,colSums(is.na(trainingdata)) == 0]
+testingdata <-testingdata[,colSums(is.na(testingdata)) == 0]
+```
+
+
+## 5.4 Removing columns with near zero variance
+
+Next we remove variables which have near Zero variance. Same columns from the both data sets.
+
+```{r nzv, echo=TRUE, warning=FALSE, message=FALSE}
+trainingNZV <- nearZeroVar(trainingdata)
+trainingdata <- trainingdata[, -trainingNZV]
+testingdata <- testingdata[, -trainingNZV]
+```
+
+Now we have data sets with following dimensions:
+
+```{r dimensions2, echo=TRUE, warning=FALSE, message=FALSE}
+dim(trainingdata)
+dim(testingdata)
+```
+
+# 6 Split the data
+
+Next we split the training data for cross validation. Split is made with 70-30 principle.  
+
+```{r split, echo=TRUE, warning=FALSE, message=FALSE}
+
+# splitting
+train <- createDataPartition(trainingdata$classe, p=0.7, list=FALSE)
+trainingdata_training <- trainingdata[train,]
+trainingdata_testing  <- trainingdata[-train,]
+
+# dimensions
+dim(trainingdata_training)
+dim(trainingdata_testing)
+```
+
+
+
+# 7 Predictions
+
+Then we need to find out which model makes the best predictions. 
+
+Here we use *trainControl* to perform cross validation because we like to avoid overfitting and reduce out of sample errors. 
+
+```{r trainc, echo=TRUE, warning=FALSE, message=FALSE}
+trainc <- trainControl(method = "cv", number = 7, verboseIter=FALSE , preProcOptions="pca", allowParallel=TRUE)
+```
+
+## 7.1 Gradient Boosting (GBM)
+
+First model is gradient boosting:
+
+```{r gbm, echo=TRUE, results="hide", warning=FALSE, message=FALSE}
+gbm <- train(classe ~ ., data = trainingdata_training, method = "gbm", trControl= trainc)
+gbmacc <- max(gbm$results$Accuracy)
+```
+
+Accuracy of the model is `r gbmacc`.
+
+
+## 7.2 Random forests
+
+Second prediction is made by Random forests
+
+```{r rf, echo=TRUE, results="hide", warning=FALSE, message=FALSE}
+
+rf <- train(classe ~ ., data = trainingdata_training, method = "rf", trControl= trainc)
+rfacc <- max(rf$results$Accuracy)
+```
+
+Accuracy of the model is `r rfacc`.
+
+## 7.3 Support Vector Machine (Radial)
+
+Third prediction is made by Bayeasian GLM.
+
+```{r svmr, echo=TRUE, results="hide", warning=FALSE, message=FALSE}
+svmr <- train(classe ~ ., data = trainingdata_training, method = "svmRadial", trControl= trainc)
+svmracc <- max(svmr$results$Accuracy)
+```
+
+Accuracy of the model is `r svmracc`.
+
+## 7.4 Cross validation
+
+Next we calculate accuracy based on the test set that we created for cross-validation. Because Random Forest (see above) has the best accuracy, we use it here.
+
+```{r confm, echo=TRUE, warning=FALSE, message=FALSE}
+cv_predict <- predict(rf, trainingdata_testing)
+conf_matrix <- confusionMatrix(cv_predict, trainingdata_testing$classe)
+cvacc <- confusionMatrix(cv_predict,trainingdata_testing$classe)$overall['Accuracy']
+conf_matrix
+```
+
+The accuracy of the model is `r cvacc`. The accuracy shows also the expected out of sample error when predicting on an independent sample.
+
+# 8 Test
+
+Now, at last we run the 20 test cases through the Random Forest model:
+
+```{r testdata, echo=TRUE, warning=FALSE, message=FALSE}
+rftest <- predict(rf, testingdata)
+rftest
+```
+
+
+
